@@ -1,0 +1,21 @@
+﻿# voice_llm partition table -- 16 MB flash.
+#
+# Three tenants:
+#   app      -- the sketch itself (esp-sr + AFE + LLM runtime), 4 MB
+#   model    -- ESP-SR models (wakenet9 nihaoxiaozhi + multinet7 cn), 6 MB.
+#               MUST be named "model": esp-sr's build system flashes
+#               srmodels.bin to the partition with that exact name
+#               (esp-sr CMakeLists.txt:124). At runtime esp_srmodel_init()
+#               is called with this label.
+#   llmmodel -- the 1219 KB LLM weight file, memory-mapped at boot.
+#               Same offset/size/subtype as espcontrol's "model" partition,
+#               so firmware/model/model.bin is used as-is. Renamed because
+#               esp-sr owns the "model" name; llm_runtime.c looks the
+#               partition up as (DATA, 0x40, "llmmodel").
+#
+# Name,    Type, SubType, Offset,   Size,      Flags
+nvs,       data, nvs,     0x9000,   0x5000,
+otadata,   data, ota,     0xe000,   0x2000,
+app,       app,  factory, 0x10000,  0x400000,
+llmmodel,  data, 0x40,    0x410000, 0x1E0000,
+model,     data, 0x40,    0x5f0000, 0x600000,

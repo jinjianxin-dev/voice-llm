@@ -1,0 +1,69 @@
+## Target chip
+CONFIG_IDF_TARGET="esp32s3"
+
+## Use the project's own partitions.csv (app / model / srmodel on 16 MB)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+## QIO flash is REQUIRED on this chip (S3 rev v0.2, in-package octal PSRAM).
+## In DIO the flash QE bit is never set and every PSRAM data access stalls the
+## CPU forever (boot appears to freeze silently). Verified against esp-hal
+## issue #6456 (Oct 2026) and empirically: psram free went 0 -> 8 MB.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+## esp-sr models: wake word + Chinese MultiNet7
+CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
+CONFIG_SR_MN_CN_MULTINET7_QUANT=y
+
+## Octal PSRAM (8 MB) -- AFE + MultiNet KV + the LLM KV cache all live here
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+## 40 MHz instead of 80: the octal PSRAM on this chip (rev v0.2) calibrates to
+## a different timing index on every boot and hangs on the first data access
+## at 80 MHz. Slower bus, stable boot.
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+## Speed
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+## esp-sr recommended cache sizes for the S3
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+## Console on the native USB port through the interrupt-driven USB-Serial/JTAG
+## driver.
+##
+## History: we first used the ROM CDC console (Arduino "USB CDC On Boot"
+## equivalent). It works only while a host keeps draining its 64-byte TX FIFO;
+## once the FIFO stalls the CDC control endpoint stops answering, and Windows
+## then reports "连到系统上的设备没有发挥作用 (error 31)" on every open -- the
+## board looks dead until it is replugged. The USJ driver writes with a timeout
+## from an ISR, so a missing reader can never wedge the chip.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_ESP_CONSOLE_USB_CDC is not set
+
+## Diagnostics: reboot on panic. HALT looked identical to a silent hang
+## (no output, no reset), which is useless when the crash happens before the
+## console is up. A reboot at least shows up as a re-enumeration in the log.
+# CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT is not set
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+## Run on CPU0 only. The dual-core bring-up hangs on this chip/config combo
+## (boot stops right after "cpu_start: Multicore app", verified twice with a
+## steady-line serial reader). One 240 MHz core is plenty for I2S + AFE +
+## MultiNet + the 312K LLM.
+CONFIG_FREERTOS_UNICORE=y
+
+## The 8 MB PSRAM self-test runs silently right after the "Single core mode"
+## log; on this board it never returns. Skip it -- the PSRAM driver's own
+## detection logs already prove the chip is there.
+CONFIG_SPIRAM_MEMTEST=n
