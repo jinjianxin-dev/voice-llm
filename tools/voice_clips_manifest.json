@@ -1,0 +1,163 @@
+[
+  {
+    "id": "ZERO",
+    "text": "零",
+    "offset": 0,
+    "samples": 7086,
+    "ms": 295.2
+  },
+  {
+    "id": "ONE",
+    "text": "一",
+    "offset": 7086,
+    "samples": 6680,
+    "ms": 278.3
+  },
+  {
+    "id": "TWO",
+    "text": "二",
+    "offset": 13766,
+    "samples": 7021,
+    "ms": 292.5
+  },
+  {
+    "id": "THREE",
+    "text": "三",
+    "offset": 20787,
+    "samples": 8341,
+    "ms": 347.5
+  },
+  {
+    "id": "FOUR",
+    "text": "四",
+    "offset": 29128,
+    "samples": 8425,
+    "ms": 351.0
+  },
+  {
+    "id": "FIVE",
+    "text": "五",
+    "offset": 37553,
+    "samples": 7065,
+    "ms": 294.4
+  },
+  {
+    "id": "SIX",
+    "text": "六",
+    "offset": 44618,
+    "samples": 6832,
+    "ms": 284.7
+  },
+  {
+    "id": "SEVEN",
+    "text": "七",
+    "offset": 51450,
+    "samples": 8123,
+    "ms": 338.5
+  },
+  {
+    "id": "EIGHT",
+    "text": "八",
+    "offset": 59573,
+    "samples": 6885,
+    "ms": 286.9
+  },
+  {
+    "id": "NINE",
+    "text": "九",
+    "offset": 66458,
+    "samples": 7034,
+    "ms": 293.1
+  },
+  {
+    "id": "TEN",
+    "text": "十",
+    "offset": 73492,
+    "samples": 8812,
+    "ms": 367.2
+  },
+  {
+    "id": "HAOJIAO",
+    "text": "号脚",
+    "offset": 82304,
+    "samples": 11413,
+    "ms": 475.5
+  },
+  {
+    "id": "OPENED",
+    "text": "已打开",
+    "offset": 93717,
+    "samples": 14543,
+    "ms": 606.0
+  },
+  {
+    "id": "CLOSED",
+    "text": "已关闭",
+    "offset": 108260,
+    "samples": 14507,
+    "ms": 604.5
+  },
+  {
+    "id": "ALL_ON",
+    "text": "已全部打开",
+    "offset": 122767,
+    "samples": 22347,
+    "ms": 931.1
+  },
+  {
+    "id": "ALL_OFF",
+    "text": "已全部关闭",
+    "offset": 145114,
+    "samples": 21372,
+    "ms": 890.5
+  },
+  {
+    "id": "BLINK",
+    "text": "开始闪烁",
+    "offset": 166486,
+    "samples": 19590,
+    "ms": 816.2
+  },
+  {
+    "id": "CHASE",
+    "text": "跑马灯启动",
+    "offset": 186076,
+    "samples": 22511,
+    "ms": 938.0
+  },
+  {
+    "id": "STOPPED",
+    "text": "已停止",
+    "offset": 208587,
+    "samples": 14900,
+    "ms": 620.8
+  },
+  {
+    "id": "OK",
+    "text": "好的",
+    "offset": 223487,
+    "samples": 9705,
+    "ms": 404.4
+  },
+  {
+    "id": "HERE",
+    "text": "我在",
+    "offset": 233192,
+    "samples": 10492,
+    "ms": 437.2
+  },
+  {
+    "id": "NOPE",
+    "text": "没听懂",
+    "offset": 243684,
+    "samples": 15632,
+    "ms": 651.3
+  },
+  {
+    "id": "BADPIN",
+    "text": "这个引脚不能用",
+    "offset": 259316,
+    "samples": 26629,
+    "ms": 1109.5
+  }
+]

@@ -234,18 +234,31 @@ static bool alias_typed(const char *line, char *msg, size_t msg_size) {
 }
 
 int llmrt_run_text(const char *text, char *msg, size_t msg_size, uint32_t *ms) {
+    return llmrt_run_text_ex(text, msg, msg_size, ms, NULL);
+}
+
+int llmrt_run_text_ex(const char *text, char *msg, size_t msg_size, uint32_t *ms,
+                      llmrt_outcome_t *out) {
+    if (out) {
+        memset(out, 0, sizeof(*out));
+        out->action = -1;
+        out->verdict = -1;
+    }
     msg[0] = 0;
     if (!text || !text[0]) { snprintf(msg, msg_size, "empty input"); return -1; }
-    if (alias_typed(text, msg, msg_size)) return 0;
+    if (alias_typed(text, msg, msg_size)) {
+        if (out) { out->executed = 1; out->action = ACT_ALIAS; out->verdict = 0; }
+        return 0;
+    }
 
     uint32_t t0 = now_ms();
-    int out[MAX_NEW];
-    int n = generate(text, out, MAX_NEW);
+    int sym[MAX_NEW];                 /* not `out`: that is the outcome pointer */
+    int n = generate(text, sym, MAX_NEW);
     uint32_t took = now_ms() - t0;
     if (ms) *ms = took;
 
     Command c;
-    if (cmd_parse(out, n, &bpe, &c) != 0) {
+    if (cmd_parse(sym, n, &bpe, &c) != 0) {
         snprintf(msg, msg_size, "refused: I don't understand that   (%d symbols)", n);
         return -1;
     }
@@ -260,14 +273,17 @@ int llmrt_run_text(const char *text, char *msg, size_t msg_size, uint32_t *ms) {
         const int *allow = gpio_allowed_pins(&n_allow);
         Verdict rv = cmd_range_check(&c, allow, n_allow, buf, sizeof(buf));
         if (rv != VERDICT_EXECUTE) {
+            if (out) { out->action = ACT_ALIAS; out->verdict = rv; }
             snprintf(msg, msg_size, "refused: %s   (%lums)", buf, (unsigned long)took);
             return -1;
         }
         if (alias_apply(&c, &aliases, buf, sizeof(buf)) != 0) {
+            if (out) { out->action = ACT_ALIAS; out->verdict = VERDICT_UNKNOWN; }
             snprintf(msg, msg_size, "refused: %s   (%lums)", buf, (unsigned long)took);
             return -1;
         }
         alias_save();
+        if (out) { out->executed = 1; out->action = ACT_ALIAS; out->verdict = rv; }
         snprintf(msg, msg_size, "%s   (%lums)", buf, (unsigned long)took);
         return 0;
     }
@@ -275,11 +291,21 @@ int llmrt_run_text(const char *text, char *msg, size_t msg_size, uint32_t *ms) {
     /* Resolution first: an unknown name is not a bad pin. */
     Verdict v = alias_resolve(&c, &aliases, buf, sizeof(buf));
     if (v != VERDICT_EXECUTE) {
+        if (out) { out->action = c.action; out->verdict = v; }
         snprintf(msg, msg_size, "refused: %s   (%lums)", buf, (unsigned long)took);
         return -1;
     }
 
     v = gpio_execute(&c, buf, sizeof(buf));
+    if (out) {
+        out->executed = (v == VERDICT_EXECUTE);
+        out->action   = c.action;
+        out->level    = c.level;
+        out->all      = c.all;
+        out->verdict  = v;
+        out->n_pins   = c.n_pins;
+        for (int i = 0; i < c.n_pins && i < 16; i++) out->pins[i] = c.pins[i];
+    }
     snprintf(msg, msg_size, "%s%s   (%lums)",
              v == VERDICT_EXECUTE ? "" : "refused: ", buf, (unsigned long)took);
     return v == VERDICT_EXECUTE ? 0 : -1;

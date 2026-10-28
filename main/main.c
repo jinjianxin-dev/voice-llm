@@ -34,7 +34,18 @@
 #include "esp_process_sdkconfig.h"
 #include "model_path.h"
 
+/* command.h carries the shared enums (CmdAction, CmdLevel, Verdict) this file
+ * needs to turn an outcome into words, plus a handful of static helpers that
+ * only llm_runtime.c uses. Suppress the "defined but not used" noise rather
+ * than mirroring the enum values here, where they could drift. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "command.h"
+#pragma GCC diagnostic pop
+
 #include "llm_runtime.h"
+#include "mouth.h"
+#include "voice_clips.h"
 
 #define I2S_BCLK  GPIO_NUM_5
 #define I2S_WS    GPIO_NUM_6
@@ -42,6 +53,9 @@
 #define SAMPLE_RATE 16000
 
 static const char *TAG = "voice_llm";
+
+/* Defined below (see "Speaking the result"); the detect task needs it. */
+static void schedule_reply(const llmrt_outcome_t *r);
 
 /* ------------------------------------------------------------------ */
 /* Voice command table: one MultiNet command id -> an English utterance
@@ -249,12 +263,28 @@ static void detect_task(void *arg) {
     int wakeup = 0;
     printf("------------listening: say \"ni hao xiao zhi\"------------\n");
     int last_vad = -1;   /* debug: print VAD transitions + what AFE hears */
+    int ear_gated = 0;   /* 1 while the mouth owns the room (half duplex) */
+
     while (s_task_flag) {
         afe_fetch_result_t *res = s_afe_handle->fetch(s_afe_data);
         if (!res || res->ret_value == ESP_FAIL) {
             printf("fetch error!\n");
             break;
         }
+
+        /* Half duplex, and not out of politeness: the MAX98357 is 20 cm from
+         * the INMP441 with no AEC (the AFE runs "M", one mic, no reference
+         * channel). While a reply is playing, the board would hear its own
+         * "打开八号脚" and MultiNet would match it -- the lamp toggles forever.
+         * So the ear goes deaf for the reply plus MOUTH_TAIL_MS of room echo.
+         * Anything said in that window is lost; the log says so. */
+        int gated = mouth_gate_closed() ? 1 : 0;
+        if (gated != ear_gated) {
+            ear_gated = gated;
+            multinet->clean(model_data);   /* drop any half-eaten utterance */
+            printf(gated ? "[ear muted: speaking]\n" : "[ear live]\n");
+        }
+        if (gated) continue;
 
         if ((int)res->vad_state != last_vad) {
             last_vad = (int)res->vad_state;
@@ -270,6 +300,10 @@ static void detect_task(void *arg) {
             printf(">> wake word detected\n");
             multinet->clean(model_data);
             wakeup = 1;
+            /* A person says "我在" when you call their name. Wait for it to
+             * finish before speaking: the command window opens after it. */
+            mouth_say(VC_HERE);
+            continue;
         }
 
         if (!wakeup) continue;
@@ -285,8 +319,10 @@ static void detect_task(void *arg) {
             if (vc) {
                 char msg[160];
                 uint32_t ms = 0;
-                llmrt_run_text(vc->text, msg, sizeof(msg), &ms);
+                llmrt_outcome_t outc;
+                llmrt_run_text_ex(vc->text, msg, sizeof(msg), &ms, &outc);
                 printf(">> %s\n", msg);
+                schedule_reply(&outc);
             }
             multinet->clean(model_data);        /* continuous mode: next command without re-wake */
         } else if (st == ESP_MN_STATE_TIMEOUT) {
@@ -297,6 +333,77 @@ static void detect_task(void *arg) {
     }
     multinet->destroy(model_data);
     vTaskDelete(NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Speaking the result.
+ *
+ * The 312K model emits <set> <pin> 8 <high>, never a sentence, so the reply is
+ * assembled from word clips -- the same way the model assembles symbols.
+ * Numbers compose in Chinese (三十八 = 三 十 八), so ten digit clips cover all
+ * 25 usable pins.  Anything longer than one pin is summarised with "好的":
+ * reading out "一号脚、二号脚、八号脚已打开" takes four seconds and tells the user
+ * nothing the LEDs have not already shown. */
+
+static const uint8_t k_digit[10] = {
+    VC_ZERO, VC_ONE, VC_TWO, VC_THREE, VC_FOUR,
+    VC_FIVE, VC_SIX, VC_SEVEN, VC_EIGHT, VC_NINE,
+};
+
+static int push_number(int v, uint8_t *seq, int k) {
+    if (v < 0 || k >= MOUTH_SEQ_MAX) return k;
+    if (v <= 10) { seq[k++] = k_digit[v]; return k; }
+    if (v < 20) {
+        seq[k++] = VC_TEN;
+        if (k < MOUTH_SEQ_MAX) seq[k++] = k_digit[v - 10];
+        return k;
+    }
+    if (k < MOUTH_SEQ_MAX) seq[k++] = k_digit[v / 10];
+    if (k < MOUTH_SEQ_MAX) seq[k++] = VC_TEN;
+    if (v % 10 && k < MOUTH_SEQ_MAX) seq[k++] = k_digit[v % 10];
+    return k;
+}
+
+static void schedule_reply(const llmrt_outcome_t *r) {
+    uint8_t seq[MOUTH_SEQ_MAX];
+    int k = 0;
+
+    if (!r->executed) {
+        /* "这个引脚不能用" only when the pin itself was the problem; every other
+         * refusal is the model not understanding, which is a different thing
+         * to tell the user and a different thing to go fix. */
+        seq[k++] = (r->verdict == VERDICT_BAD_PIN) ? VC_BADPIN : VC_NOPE;
+        mouth_say_seq(seq, k);
+        return;
+    }
+
+    switch (r->action) {
+    case ACT_SET:
+        if (r->all) {
+            seq[k++] = (r->level == LVL_LOW) ? VC_ALL_OFF : VC_ALL_ON;
+        } else if (r->n_pins == 1 && r->level != LVL_TOGGLE) {
+            k = push_number(r->pins[0], seq, k);
+            if (k < MOUTH_SEQ_MAX) seq[k++] = VC_HAOJIAO;
+            if (k < MOUTH_SEQ_MAX)
+                seq[k++] = (r->level == LVL_HIGH) ? VC_OPENED : VC_CLOSED;
+        } else {
+            seq[k++] = VC_OK;          /* several pins, or a toggle: no number */
+        }
+        break;
+
+    case ACT_BLINK:
+        if (r->n_pins == 1) {
+            k = push_number(r->pins[0], seq, k);
+            if (k < MOUTH_SEQ_MAX) seq[k++] = VC_HAOJIAO;
+        }
+        if (k < MOUTH_SEQ_MAX) seq[k++] = VC_BLINK;
+        break;
+
+    case ACT_SEQ:   seq[k++] = VC_CHASE;   break;
+    case ACT_STOP:  seq[k++] = VC_STOPPED; break;
+    default:        seq[k++] = VC_OK;      break;
+    }
+    mouth_say_seq(seq, k);
 }
 
 /* ------------------------------------------------------------------ */
@@ -323,10 +430,35 @@ static void repl_task(void *arg) {
         line[n] = 0;
         if (!line[0]) { printf("> "); continue; }
 
+        /* Mouth diagnostics, typed, so a silent speaker can be checked without
+         * saying anything: "vt" = say it, "vt 21" = say 21, "vm" = counters. */
+        if (strncmp(line, "vm", 2) == 0) {
+            char s[128];
+            mouth_stats(s, sizeof(s));
+            printf("%s\n> ", s);
+            continue;
+        }
+        if (strncmp(line, "vt", 2) == 0) {
+            int pin = atoi(line + 2);
+            if (pin <= 0) pin = 8;
+            uint8_t seq[MOUTH_SEQ_MAX];
+            int k = push_number(pin, seq, 0);
+            if (k < MOUTH_SEQ_MAX) seq[k++] = VC_HAOJIAO;
+            if (k < MOUTH_SEQ_MAX) seq[k++] = VC_OPENED;
+            printf("speaking: %d 号脚 已打开\n", pin);
+            mouth_say_seq(seq, k);
+            printf("> ");
+            continue;
+        }
+
         char msg[160];
         uint32_t ms = 0;
-        llmrt_run_text(line, msg, sizeof(msg), &ms);
+        llmrt_outcome_t outc;
+        llmrt_run_text_ex(line, msg, sizeof(msg), &ms, &outc);
         printf("%s\n> ", msg);
+        /* Typed commands speak too: it is the only way to check the reply
+         * wording without saying anything out loud. */
+        schedule_reply(&outc);
     }
     vTaskDelete(NULL);
 }
@@ -353,7 +485,7 @@ void app_main(void) {
 
     printf("\nvoice_llm: offline voice control for the pin LLM\n");
     s_step = 1;
-    printf("[step] 1/6 nvs\n");
+    printf("[step] 1/7 nvs\n");
     vTaskDelay(pdMS_TO_TICKS(300));
 
     esp_err_t err = nvs_flash_init();
@@ -367,12 +499,24 @@ void app_main(void) {
         while (1) vTaskDelay(1000);
     }
     s_step = 2;
-    printf("[step] 2/6 llm mapped + seeded\n");
+    printf("[step] 2/7 llm mapped + seeded\n");
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    /* The mouth comes up before the ear: its self-test is the fastest way to
+     * tell "no sound because the channel is dead" from "no sound because the
+     * amp is unplugged", and it costs half a second of boot. */
+    if (mouth_init() != 0) {
+        printf("mouth init failed -- continuing mute (ears and brain still work)\n");
+    } else {
+        mouth_selftest();
+    }
+    s_step = 3;
+    printf("[step] 3/7 mouth\n");
     vTaskDelay(pdMS_TO_TICKS(300));
 
     i2s_mic_init();
-    s_step = 3;
-    printf("[step] 3/6 i2s mic\n");
+    s_step = 4;
+    printf("[step] 4/7 i2s mic\n");
     vTaskDelay(pdMS_TO_TICKS(300));
 
     s_models = esp_srmodel_init("model");   /* esp-sr owns the "model" name */
@@ -380,8 +524,8 @@ void app_main(void) {
         printf("no 'model' partition or no srmodels flashed at 0x5f0000\n");
         while (1) vTaskDelay(1000);
     }
-    s_step = 4;
-    printf("[step] 4/6 srmodel partition\n");
+    s_step = 5;
+    printf("[step] 5/7 srmodel partition\n");
     char *wn_name = esp_srmodel_filter(s_models, ESP_WN_PREFIX, NULL);
     printf("wakenet model: %s\n", wn_name ? wn_name : "(none)");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -390,13 +534,13 @@ void app_main(void) {
     s_afe_handle = esp_afe_handle_from_config(afe_config);
     s_afe_data = s_afe_handle->create_from_config(afe_config);
     afe_config_free(afe_config);
-    s_step = 5;
-    printf("[step] 5/6 afe created\n");
+    s_step = 6;
+    printf("[step] 6/7 afe created\n");
     vTaskDelay(pdMS_TO_TICKS(300));
 
     build_command_table();
-    s_step = 6;
-    printf("[step] 6/6 tasks\n");
+    s_step = 7;
+    printf("[step] 7/7 tasks\n");
 
     s_task_flag = 1;
     /* Unicore build (CONFIG_FREERTOS_UNICORE=y): core 1 does not exist.
